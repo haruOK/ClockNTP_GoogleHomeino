@@ -14,7 +14,6 @@ bool setup_flag = false;
 static bool m5_setup_flag = false;
 static bool wifi_setup_flag = false;
 static bool googlehome_setup_flag = false;
-static bool ntp_setup_flag = false;
 static bool cron_setup_flag = false;
 static bool thread_setup_flag = false;
 CronID_t TimeSignalAlarm_CronID;
@@ -84,6 +83,7 @@ static void MorningAlarm(void)
   getTimeString(str);
   strcat(str, "起きる時間です。おはようございます");
   ghnSendMessage(str);
+  ntp_setup();
 }
 
 //夜の挨拶
@@ -244,11 +244,9 @@ static void googlehome_setup(void)
 }
 
 //ntpサーバから時刻を取得
+//たまに時刻補正するためインスタンスにはしない
 static void ntp_setup(void)
 {
-  if (ntp_setup_flag == true)
-    return;
-
   const char *ntpServer = "ntp.nict.jp";
   const long gmtOffset_sec = 9 * 3600;
   const int daylightOffset_sec = 0;
@@ -256,7 +254,6 @@ static void ntp_setup(void)
   wifi_setup();
   //init and get the time
   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-  ntp_setup_flag = true;
 }
 
 // 時報機能をcronで起動する
