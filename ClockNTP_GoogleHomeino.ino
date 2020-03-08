@@ -17,14 +17,14 @@ static bool googlehome_setup_flag = false;
 static bool ntp_setup_flag = false;
 static bool cron_setup_flag = false;
 static bool thread_setup_flag = false;
-CronID_t TestAlarm_CronID;
+CronID_t TimeSignalAlarm_CronID;
 CronID_t MorningAlarm_CronID;
 CronID_t EveningAlarm_CronID;
 
 /** static functions **/
 static void ghnSendMessage(const char *str);
 static void getTimeString(char *str);
-static void TestAlarm(void);
+static void TimeSignalAlarm(void);
 static void MorningAlarm(void);
 static void EveningAlarm(void);
 static void m5_setup(void);
@@ -35,14 +35,9 @@ static void cron_setup(void);
 static void thread_setup(void);
 static void printLocalTime(void);
 static void printEnvData(void);
-static void timeCalculationTask(void *pvParameters);
+static void printDisplayTask(void *pvParameters);
 
-static void ghnSendMessage(const char *str)
-{
-  if (googlehome_setup_flag == true)
-    ghn.notify(str);
-}
-
+//現時刻を文字列で取得
 static void getTimeString(char *str)
 {
   struct tm timeinfo;
@@ -62,17 +57,27 @@ static void getTimeString(char *str)
   }
   else
   {
+    //
     sprintf(str, "%sになりました。", str);
   }
 }
 
-static void TestAlarm(void)
+//文字列をGoogleHomeへ通知する
+static void ghnSendMessage(const char *str)
+{
+  if (googlehome_setup_flag == true)
+    ghn.notify(str);
+}
+
+//通常の時刻通知
+static void TimeSignalAlarm(void)
 {
   char str[100];
   getTimeString(str);
   ghnSendMessage(str);
 }
 
+//朝の挨拶
 static void MorningAlarm(void)
 {
   char str[100];
@@ -81,6 +86,7 @@ static void MorningAlarm(void)
   ghnSendMessage(str);
 }
 
+//夜の挨拶
 static void EveningAlarm(void)
 {
   char str[100];
@@ -89,6 +95,98 @@ static void EveningAlarm(void)
   ghnSendMessage(str);
 }
 
+// 時刻を画面に表示する
+static void printLocalTime()
+{
+  struct tm timeinfo;
+  getLocalTime(&timeinfo);
+
+  int8_t hh = timeinfo.tm_hour;
+  int8_t mm = timeinfo.tm_min;
+  int8_t ss = timeinfo.tm_sec;
+  static byte omm = 99, oss = 99;
+  static byte xcolon = 0, xsecs = 0;
+
+  // Update digital time
+  int xpos = 0;
+  // int ypos = 85; // Top left corner ot clock text, about half way down
+  // int ysecs = ypos + 24;
+  int ypos = 20; // Top left corner ot clock text, about half way down
+  int ysecs = ypos + 30;
+
+  if (omm != mm)
+  { // Redraw hours and minutes time every minute
+    omm = mm;
+
+    // Draw hours and minutes
+    if (hh < 10)
+      xpos += M5.Lcd.drawChar('0', xpos, ypos, 8); // Add hours leading zero for 24 hr clock
+    xpos += M5.Lcd.drawNumber(hh, xpos, ypos, 8);  // Draw hours
+    xcolon = xpos;                                 // Save colon coord for later to flash on/off later
+    xpos += M5.Lcd.drawChar(':', xpos, ypos - 8, 8);
+    if (mm < 10)
+      xpos += M5.Lcd.drawChar('0', xpos, ypos, 8); // Add minutes leading zero
+    xpos += M5.Lcd.drawNumber(mm, xpos, ypos, 8);  // Draw minutes
+    xsecs = xpos;                                  // Sae seconds 'x' position for later display updates
+  }
+
+  if (oss != ss)
+  { // Redraw seconds time every second
+    oss = ss;
+    xpos = xsecs;
+
+    if (ss % 2)
+    {                                                // Flash the colons on/off
+      M5.Lcd.setTextColor(0x39C4, TFT_BLACK);        // Set colour to grey to dim colon
+      M5.Lcd.drawChar(':', xcolon, ypos - 8, 8);     // Hour:minute colon
+      xpos += M5.Lcd.drawChar(':', xsecs, ysecs, 6); // Seconds colon
+      M5.Lcd.setTextColor(TFT_YELLOW, TFT_BLACK);    // Set colour back to yellow
+    }
+    else
+    {
+      M5.Lcd.drawChar(':', xcolon, ypos - 8, 8);     // Hour:minute colon
+      xpos += M5.Lcd.drawChar(':', xsecs, ysecs, 6); // Seconds colon
+    }
+
+    //Draw seconds
+    if (ss < 10)
+      xpos += M5.Lcd.drawChar('0', xpos, ysecs, 6); // Add leading zero
+    M5.Lcd.drawNumber(ss, xpos, ysecs, 6);          // Draw seconds
+  }
+}
+
+// 温湿度を画面に表示する
+static void printEnvData(void)
+{
+  static DHT12 dht12; //Preset scale CELSIUS and ID 0x5c.
+  int xpos = 0;
+  int ypos = 160; // Top left corner ot clock text, about half way down
+
+  //Read temperature with preset scale.
+  xpos += M5.Lcd.drawFloat(dht12.readTemperature(), 1, xpos, ypos, 6);
+  xpos += M5.Lcd.drawString("*C   ", xpos, ypos, 4);
+  xpos += M5.Lcd.drawFloat(dht12.readHumidity(), 1, xpos, ypos, 6);
+  xpos += M5.Lcd.drawString("%", xpos, ypos, 4);
+}
+
+//画面表示を管理するタスク
+//GoogleHome通知中に画面表示が遅延するのを防ぐため、別タスクにする
+static void printDisplayTask(void *pvParameters)
+{
+  int count = 0;
+  while (1)
+  {
+    printLocalTime();
+    if (count == 0)
+    {
+      printEnvData();
+    }
+    vTaskDelay(10);
+    count = (count + 1) % 70;
+  }
+}
+
+//M5Stack初期設定
 static void m5_setup(void)
 {
   if (m5_setup_flag == true)
@@ -102,6 +200,8 @@ static void m5_setup(void)
   m5_setup_flag = true;
 }
 
+//Wifi初期設定
+//SSIDとパスワードは別ファイルにて管理
 static void wifi_setup(void)
 {
   if (wifi_setup_flag == true)
@@ -165,7 +265,7 @@ static void cron_setup(void)
   if (cron_setup_flag == true)
     return;
 
-  TestAlarm_CronID = Cron.create("0 0 * * * *", TestAlarm, false);          // every hour
+  TimeSignalAlarm_CronID = Cron.create("0 0 * * * *", TimeSignalAlarm, false);          // every hour
   MorningAlarm_CronID = Cron.create("0 15 6 * * 1-5", MorningAlarm, false); // 6:15am every weekday
   EveningAlarm_CronID = Cron.create("0 45 20 * * *", EveningAlarm, false);  // 20:45 every day
   cron_setup_flag = true;
@@ -178,10 +278,14 @@ static void thread_setup(void)
   if (thread_setup_flag == true)
     return;
 
+  // 画面はM5Stackのみ
+  if(m5_setup_flag != true)
+    return;
+
   //Core 1 thread
   xTaskCreatePinnedToCore(
-      timeCalculationTask,
-      "timeCalculation",
+      printDisplayTask,
+      "printDisplay",
       8192,
       NULL,
       1,
@@ -189,102 +293,6 @@ static void thread_setup(void)
       0);
 
   thread_setup_flag = true;
-}
-
-// 画面表示系
-// 時刻表示
-static void printLocalTime()
-{
-  if(m5_setup_flag != true)
-    return;
-
-  struct tm timeinfo;
-  getLocalTime(&timeinfo);
-
-  int8_t hh = timeinfo.tm_hour;
-  int8_t mm = timeinfo.tm_min;
-  int8_t ss = timeinfo.tm_sec;
-  static byte omm = 99, oss = 99;
-  static byte xcolon = 0, xsecs = 0;
-
-  // Update digital time
-  int xpos = 0;
-  // int ypos = 85; // Top left corner ot clock text, about half way down
-  // int ysecs = ypos + 24;
-  int ypos = 20; // Top left corner ot clock text, about half way down
-  int ysecs = ypos + 30;
-
-  if (omm != mm)
-  { // Redraw hours and minutes time every minute
-    omm = mm;
-
-    // Draw hours and minutes
-    if (hh < 10)
-      xpos += M5.Lcd.drawChar('0', xpos, ypos, 8); // Add hours leading zero for 24 hr clock
-    xpos += M5.Lcd.drawNumber(hh, xpos, ypos, 8);  // Draw hours
-    xcolon = xpos;                                 // Save colon coord for later to flash on/off later
-    xpos += M5.Lcd.drawChar(':', xpos, ypos - 8, 8);
-    if (mm < 10)
-      xpos += M5.Lcd.drawChar('0', xpos, ypos, 8); // Add minutes leading zero
-    xpos += M5.Lcd.drawNumber(mm, xpos, ypos, 8);  // Draw minutes
-    xsecs = xpos;                                  // Sae seconds 'x' position for later display updates
-  }
-
-  if (oss != ss)
-  { // Redraw seconds time every second
-    oss = ss;
-    xpos = xsecs;
-
-    if (ss % 2)
-    {                                                // Flash the colons on/off
-      M5.Lcd.setTextColor(0x39C4, TFT_BLACK);        // Set colour to grey to dim colon
-      M5.Lcd.drawChar(':', xcolon, ypos - 8, 8);     // Hour:minute colon
-      xpos += M5.Lcd.drawChar(':', xsecs, ysecs, 6); // Seconds colon
-      M5.Lcd.setTextColor(TFT_YELLOW, TFT_BLACK);    // Set colour back to yellow
-    }
-    else
-    {
-      M5.Lcd.drawChar(':', xcolon, ypos - 8, 8);     // Hour:minute colon
-      xpos += M5.Lcd.drawChar(':', xsecs, ysecs, 6); // Seconds colon
-    }
-
-    //Draw seconds
-    if (ss < 10)
-      xpos += M5.Lcd.drawChar('0', xpos, ysecs, 6); // Add leading zero
-    M5.Lcd.drawNumber(ss, xpos, ysecs, 6);          // Draw seconds
-  }
-}
-
-// 温湿度表示
-static void printEnvData(void)
-{
-  if(m5_setup_flag != true)
-    return;
-
-  static DHT12 dht12; //Preset scale CELSIUS and ID 0x5c.
-  int xpos = 0;
-  int ypos = 160; // Top left corner ot clock text, about half way down
-
-  //Read temperature with preset scale.
-  xpos += M5.Lcd.drawFloat(dht12.readTemperature(), 1, xpos, ypos, 6);
-  xpos += M5.Lcd.drawString("*C   ", xpos, ypos, 4);
-  xpos += M5.Lcd.drawFloat(dht12.readHumidity(), 1, xpos, ypos, 6);
-  xpos += M5.Lcd.drawString("%", xpos, ypos, 4);
-}
-
-static void timeCalculationTask(void *pvParameters)
-{
-  int count = 0;
-  while (1)
-  {
-    printLocalTime();
-    if (count == 0)
-    {
-      printEnvData();
-    }
-    vTaskDelay(10);
-    count = (count + 1) % 70;
-  }
 }
 
 // セットアップ
@@ -312,7 +320,7 @@ void loop()
     // if you want to use Releasefor("was released for"), use .wasReleasefor(int time) below
     if (M5.BtnA.wasReleased())
     {
-      TestAlarm();
+      TimeSignalAlarm();
     }
     else if (M5.BtnB.wasReleased())
     {
